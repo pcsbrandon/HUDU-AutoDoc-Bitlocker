@@ -7,7 +7,7 @@ param(
 Add-Type -AssemblyName System.Web
 
 # ===================== CONFIGURATION =====================
-$HuduBaseUrl         = "https://docs.pcsmsp.com/api/v1"
+$HuduBaseUrl         = "https://YOURHUDUDOMAIN/api/v1"
 $HuduApiKey          = "YOUR_API_KEY_HERE"
 $ComputerLayoutName  = "Configurations"
 $BitLockerLayoutName = "Bitlocker"
