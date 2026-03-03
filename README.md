@@ -1,4 +1,4 @@
-# HUDU-AutoDoc
+# HUDU-AutoDoc-Bitlocker
 
 PowerShell automation scripts for documenting endpoints and configurations into [Hudu](https://www.hudu.com) — maintained by Pittsburgh Computer Solutions.
 
