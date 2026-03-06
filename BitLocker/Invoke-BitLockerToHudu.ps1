@@ -1,4 +1,9 @@
 #Requires -RunAsAdministrator
+#Stagger startup between 0-60 seconds to spread API load across machines
+
+$startDelay = Get-Random -Minimum 0 -Maximum 60
+Write-Host "Startup delay: $startDelay seconds (rate limit staggering)..." -ForegroundColor DarkGray
+Start-Sleep -Seconds $startDelay
 param(
     [Parameter(Mandatory = $false)]
     [string]$CompanyName = ""
@@ -41,39 +46,72 @@ $VolStatusMap = @{
     "4" = "EncryptionPaused"
     "5" = "DecryptionPaused"
 }
+function Invoke-HuduWithRetry {
+    param(
+        [scriptblock]$ScriptBlock,
+        [string]$Description = "API call",
+        [int]$MaxRetries = 5,
+        [int]$BaseDelaySeconds = 2
+    )
+    $attempt = 0
+    while ($attempt -le $MaxRetries) {
+        try {
+            $result = & $ScriptBlock
+            return $result
+        } catch {
+            $statusCode = $null
+            if ($_.Exception.Response) {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+            }
+
+            # Retry on rate limit (429) or server errors (500, 502, 503, 504)
+            if ($statusCode -in @(429, 500, 502, 503, 504) -and $attempt -lt $MaxRetries) {
+                $delay = [math]::Pow(2, $attempt) * $BaseDelaySeconds
+                # Honor Retry-After header if present on 429
+                if ($statusCode -eq 429 -and $_.Exception.Response.Headers["Retry-After"]) {
+                    $delay = [int]$_.Exception.Response.Headers["Retry-After"]
+                }
+                Write-Warning "  $Description failed (HTTP $statusCode). Retrying in $delay seconds... (attempt $($attempt + 1) of $MaxRetries)"
+                Start-Sleep -Seconds $delay
+                $attempt++
+            } else {
+                Write-Warning "$Description failed: $_"
+                return $null
+            }
+        }
+    }
+    Write-Warning "$Description failed after $MaxRetries retries."
+    return $null
+}
 
 function Invoke-HuduGet {
     param([string]$Endpoint, [hashtable]$Query = @{})
-    try {
+    return Invoke-HuduWithRetry -Description "GET $Endpoint" -ScriptBlock {
         $builder = [System.UriBuilder]::new($HuduBaseUrl + $Endpoint)
         if ($Query.Count -gt 0) {
             $qs = [System.Web.HttpUtility]::ParseQueryString("")
             foreach ($key in $Query.Keys) { $qs[$key] = $Query[$key] }
             $builder.Query = $qs.ToString()
         }
-        return Invoke-RestMethod -Uri $builder.Uri -Headers $Headers -Method Get
+        Invoke-RestMethod -Uri $builder.Uri -Headers $Headers -Method Get
     }
-    catch { Write-Warning "GET $Endpoint failed: $_"; return $null }
 }
 
 function Invoke-HuduPost {
     param([string]$Endpoint, [hashtable]$Body)
-    try {
-        return Invoke-RestMethod -Uri ($HuduBaseUrl + $Endpoint) -Headers $Headers `
+    return Invoke-HuduWithRetry -Description "POST $Endpoint" -ScriptBlock {
+        Invoke-RestMethod -Uri ($HuduBaseUrl + $Endpoint) -Headers $Headers `
             -Method Post -Body ($Body | ConvertTo-Json -Depth 10)
     }
-    catch { Write-Warning "POST $Endpoint failed: $_"; return $null }
 }
 
 function Invoke-HuduPut {
     param([string]$Endpoint, [hashtable]$Body)
-    try {
-        return Invoke-RestMethod -Uri ($HuduBaseUrl + $Endpoint) -Headers $Headers `
+    return Invoke-HuduWithRetry -Description "PUT $Endpoint" -ScriptBlock {
+        Invoke-RestMethod -Uri ($HuduBaseUrl + $Endpoint) -Headers $Headers `
             -Method Put -Body ($Body | ConvertTo-Json -Depth 10)
     }
-    catch { Write-Warning "PUT $Endpoint failed: $_"; return $null }
 }
-
 function Get-AllHuduPages {
     param([string]$Endpoint, [string]$ResultKey, [hashtable]$Query = @{})
     $all  = @()
